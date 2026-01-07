@@ -1,11 +1,41 @@
 """Generate Excel reports from git commit history."""
 
+import re
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
 from git import Repo
 import tablib
+
+GITHUB_PATTERN = re.compile(r"^[\w.-]+/[\w.-]+$")
+
+
+def is_github_identifier(value: str) -> bool:
+    """Check if value looks like a GitHub repo identifier (owner/repo)."""
+    return bool(GITHUB_PATTERN.match(value))
+
+
+@contextmanager
+def resolve_repo(repo_ref: str):
+    """Resolve a repo reference to a local path, cloning if needed.
+
+    Args:
+        repo_ref: Local path or GitHub identifier (owner/repo).
+
+    Yields:
+        Path to the repository (temporary if cloned).
+    """
+    if is_github_identifier(repo_ref):
+        url = f"https://github.com/{repo_ref}.git"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            click.echo(f"Cloning {repo_ref}...")
+            Repo.clone_from(url, tmpdir)
+            yield Path(tmpdir)
+    else:
+        yield Path(repo_ref)
 
 
 def create_report(repo_path: Path, branch: str, xlsx_out_path: Path) -> int:
@@ -40,13 +70,13 @@ def create_report(repo_path: Path, branch: str, xlsx_out_path: Path) -> int:
 
 
 @click.command()
-@click.argument("repo_path", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("repo")
 @click.argument("branch")
 @click.argument("output", type=click.Path(dir_okay=False, path_type=Path))
-def main(repo_path: Path, branch: str, output: Path):
+def main(repo: str, branch: str, output: Path):
     """Generate an Excel report of git commits.
 
-    REPO_PATH: Path to the git repository.
+    REPO: Local path or GitHub identifier (owner/repo).
 
     BRANCH: Branch name to generate report for.
 
@@ -55,9 +85,10 @@ def main(repo_path: Path, branch: str, output: Path):
     if not output.suffix:
         output = output.with_suffix(".xlsx")
 
-    click.echo(f"Generating report for {repo_path} ({branch})...")
-    count = create_report(repo_path, branch, output)
-    click.echo(f"Wrote {count} commits to {output}")
+    with resolve_repo(repo) as repo_path:
+        click.echo(f"Generating report for {repo} ({branch})...")
+        count = create_report(repo_path, branch, output)
+        click.echo(f"Wrote {count} commits to {output}")
 
 
 if __name__ == "__main__":
